@@ -7,7 +7,7 @@ from kafka import KafkaConsumer
 
 API_URL = os.getenv("API_URL", "http://localhost:8000/predict")
 
-# Connect to Kafka and subscribe to forex-events topic
+# Connect to Kafka
 consumer = KafkaConsumer(
     "forex-events",
     bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
@@ -16,10 +16,6 @@ consumer = KafkaConsumer(
     enable_auto_commit=False,
     group_id=None
 )
-# group_id=None and enable_auto_commit=False so offsets are never saved.
-# Every restart replays all events from the beginning — intentional for demo.
-# In production, set group_id="forexguard-demo" and enable_auto_commit=True
-# so the consumer resumes from where it left off after a restart.
 
 print("Listening for streaming events...\n")
 
