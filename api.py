@@ -24,7 +24,7 @@ scaler = joblib.load("scaler.pkl")
 lstm_model = load_model("lstm_model.keras")
 lstm_threshold = joblib.load("lstm_threshold.pkl")
 
-# fakeredis replaces plain dict — swap for redis.Redis(host=...) in production
+# Fakeredis
 r = fakeredis.FakeRedis()
 HISTORY_TTL = 86400  # 24 hours
 
