@@ -4,6 +4,7 @@ import pandas as pd
 WINDOW = 5
 SESSION_GAP_SECONDS = 1800
 HISTORY_CAP = 50  
+feature_cols = [
     "event_type_encoded",
     "instrument_encoded",
     "time_diff",
@@ -18,6 +19,7 @@ HISTORY_CAP = 50
     "instrument_freq",
     "withdraw_after_deposit"
 ]
+
 
 event_type_map = {
     "login": 0,
