@@ -6,7 +6,6 @@ from kafka import KafkaProducer
 
 KAFKA_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 
-# Connect to Kafka
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_SERVERS,
     value_serializer=lambda v: json.dumps(v).encode("utf-8")
@@ -28,11 +27,23 @@ events = [
     {"user_id": 99, "timestamp": "2026-01-10T13:45:00", "event_type": "trade",   "trade_volume": 24000.0, "amount": 0,      "margin": 9000.0, "instrument": "EURUSD", "ip_address": "172.16.99.254"},
 ]
 
+
+def on_success(metadata):
+    pass
+
+
+def on_error(i):
+    def _handler(exc):
+        print(f"  event {i} failed to deliver: {exc}")
+    return _handler
+
+
 print(f"Streaming {len(events)} events for user 99\n")
 
-# Stream events one per second
 for i, event in enumerate(events, start=1):
-    producer.send("forex-events", event)
+    future = producer.send("forex-events", event)
+    future.add_callback(on_success)
+    future.add_errback(on_error(i))
     print(f"sent event {i}")
     time.sleep(1)
 

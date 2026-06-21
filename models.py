@@ -1,3 +1,12 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+
+import tensorflow as tf
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+
 import pandas as pd
 import numpy as np
 import joblib
@@ -13,12 +22,10 @@ from feature_engineering import feature_cols
 from reason import generate_reason
 
 
-# Load and sort
 df = pd.read_csv("engineered_features.csv", parse_dates=["timestamp"])
 df = df.sort_values("timestamp").reset_index(drop=True)
 
 
-# Time-based split
 split_idx = int(0.8 * len(df))
 train_df = df.iloc[:split_idx].copy()
 test_df = df.iloc[split_idx:].copy()
@@ -36,7 +43,6 @@ model = IsolationForest(
 
 model.fit(X_train)
 
-# Save model
 joblib.dump(model, "if_model.pkl")
 
 test_df["if_score"] = model.decision_function(X_test)
@@ -51,46 +57,38 @@ print(classification_report(
 
 
 # LSTM Autoencoder
-
-# Fit scaler ONLY on train
+normal_train_df = train_df[train_df["is_anomaly"] == 0]
 scaler = MinMaxScaler()
-scaler.fit(X_train)
+scaler.fit(normal_train_df[feature_cols].fillna(0))
 
-# Save scaler
 joblib.dump(scaler, "scaler.pkl")
 
 sequence_length = 10
 
 
-# Train sequences
 train_sequences = []
 
 for user_id, group in train_df.groupby("user_id"):
-    group = group.sort_values("timestamp")
+    group = group.sort_values("timestamp").reset_index(drop=True)
     values = scaler.transform(group[feature_cols].fillna(0))
+    anomaly_flags = group["is_anomaly"].values
 
-    for i in range(len(values) - sequence_length):
-        train_sequences.append(values[i:i + sequence_length])
+    for i in range(len(values) - sequence_length + 1):
+        window_flags = anomaly_flags[i:i + sequence_length]
+        if window_flags.sum() == 0:
+            train_sequences.append(values[i:i + sequence_length])
 
 X_seq_train = np.array(train_sequences)
+print(f"Clean (anomaly-free) training sequences: {len(X_seq_train)}")
 
 
-# Model
 timesteps = X_seq_train.shape[1]
 features = X_seq_train.shape[2]
 
 inputs = Input(shape=(timesteps, features))
-
 encoded = LSTM(64, activation="relu")(inputs)
-
 decoded = RepeatVector(timesteps)(encoded)
-
-decoded = LSTM(
-    64,
-    activation="relu",
-    return_sequences=True
-)(decoded)
-
+decoded = LSTM(64, activation="relu", return_sequences=True)(decoded)
 outputs = TimeDistributed(Dense(features))(decoded)
 
 lstm_model = Model(inputs, outputs)
@@ -102,15 +100,13 @@ lstm_model.fit(
     X_seq_train,
     epochs=5,
     batch_size=64,
-    verbose=1
+    verbose=2
 )
 
-# Save LSTM model
 lstm_model.save("lstm_model.keras")
 
 
 # Batch Prediction
-
 print("\nPreparing test sequences...")
 
 test_sequences = []
@@ -120,46 +116,31 @@ for user_id, group in test_df.groupby("user_id"):
     group = group.sort_values("timestamp")
     values = scaler.transform(group[feature_cols].fillna(0))
 
-    for i in range(len(values) - sequence_length):
+    for i in range(len(values) - sequence_length + 1):
         test_sequences.append(values[i:i + sequence_length])
-        test_indices.append(group.index[i + sequence_length])
+        test_indices.append(group.index[i + sequence_length - 1])
 
 X_seq_test = np.array(test_sequences)
-
 print(f"Total test sequences: {len(X_seq_test)}")
 
-
 print("\nRunning batch prediction...")
-
-X_pred = lstm_model.predict(
-    X_seq_test,
-    batch_size=256,
-    verbose=1
-)
-
+X_pred = lstm_model.predict(X_seq_test, batch_size=256, verbose=1)
 errors = np.mean((X_seq_test - X_pred) ** 2, axis=(1, 2))
 
-
-# Attach scores
 test_df["lstm_score"] = np.nan
 test_df.loc[test_indices, "lstm_score"] = errors
 
 
-# Threshold
-threshold = np.percentile(errors, 97)
+train_pred = lstm_model.predict(X_seq_train, batch_size=256, verbose=0)
+train_errors = np.mean((X_seq_train - train_pred) ** 2, axis=(1, 2))
+threshold = np.percentile(train_errors, 97)
 
-# Save threshold for API
 joblib.dump(threshold, "lstm_threshold.pkl")
 
-test_df["lstm_anomaly"] = (
-    test_df["lstm_score"] > threshold
-).astype(int)
-
+test_df["lstm_anomaly"] = (test_df["lstm_score"] > threshold).astype(int)
 
 print("\nLSTM Results:")
-
 valid_idx = test_df["lstm_score"].notna()
-
 print(classification_report(
     test_df.loc[valid_idx, "is_anomaly"],
     test_df.loc[valid_idx, "lstm_anomaly"]
@@ -173,11 +154,11 @@ test_df["final_anomaly"] = (
 ).astype(int)
 
 
-def get_top_if_features(X_scaled_row: pd.DataFrame, top_n: int = 3) -> list[dict]:
-    baseline = model.decision_function(X_scaled_row)[0]
+def get_top_if_features(X_row: pd.DataFrame, top_n: int = 3) -> list[dict]:
+    baseline = model.decision_function(X_row)[0]
     impacts = {}
     for col in feature_cols:
-        X_perturbed = X_scaled_row.copy()
+        X_perturbed = X_row.copy()
         X_perturbed[col] = 0.0
         perturbed_score = model.decision_function(X_perturbed)[0]
         impacts[col] = round(float(baseline - perturbed_score), 6)
@@ -185,22 +166,14 @@ def get_top_if_features(X_scaled_row: pd.DataFrame, top_n: int = 3) -> list[dict
     return [{"feature": k, "impact": v} for k, v in top]
 
 
-# Explainability 
-X_test_scaled = pd.DataFrame(
-    scaler.transform(X_test),
-    columns=feature_cols,
-    index=test_df.index
-)
-
 def compute_reason(row):
     if row["final_anomaly"] != 1:
         return "normal behavior"
-    top_features = get_top_if_features(
-        X_test_scaled.loc[[row.name]]
-    )
+    top_features = get_top_if_features(X_test.loc[[row.name]])
     return generate_reason(top_features)
 
 test_df["reason"] = test_df.apply(compute_reason, axis=1)
+
 
 test_df["alert_level"] = "low"
 
@@ -211,7 +184,6 @@ test_df.loc[
 ] = "high"
 
 
-# Save
 test_df.to_csv("final_predictions.csv", index=False)
 
 print("\nPipeline completed")
