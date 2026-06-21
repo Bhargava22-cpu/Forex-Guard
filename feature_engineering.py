@@ -20,6 +20,7 @@ feature_cols = [
     "withdraw_after_deposit"
 ]
 
+
 event_type_map = {
     "login": 0,
     "deposit": 1,

@@ -7,7 +7,7 @@
 
 ForexGuard is a real-time anomaly detection system for a forex brokerage environment. It monitors user behavior across the client portal and trading terminal, detects suspicious patterns using machine learning, and generates human-readable risk alerts for a compliance team.
 
-The system is designed as a streaming pipeline — each incoming event is processed individually against the user's recent history, and an anomaly score with explanation is returned instantly via a REST API.
+The system is designed as a streaming pipeline — each incoming event is processed individually against the user's recent history, and an anomaly score with explanation is returned instantly via a REST API
 
 ---
 
